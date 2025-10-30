@@ -1,20 +1,22 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Output configuration for static export
-  output: 'export',
-  trailingSlash: true,
-  
-  // Disable image optimization for static export
-  images: {
-    unoptimized: true,
-  },
+  // Remove static export for Netlify deployment
+  // Netlify plugin handles the deployment better
   
   // External packages for server components
   serverExternalPackages: ['@prisma/client'],
   
+  // Image optimization configuration
+  images: {
+    unoptimized: true, // Required for Netlify
+  },
+  
   // Environment variables
   env: {
     NEXTAUTH_URL: process.env.NEXTAUTH_URL,
+    DATABASE_URL: process.env.DATABASE_URL,
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
   },
   
   // TypeScript configuration
@@ -22,9 +24,6 @@ const nextConfig = {
     // Type checking is handled by separate script
     ignoreBuildErrors: false,
   },
-  
-  // Asset prefix for deployment
-  assetPrefix: process.env.NODE_ENV === 'production' ? '' : '',
 }
 
 module.exports = nextConfig
