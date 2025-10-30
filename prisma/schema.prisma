@@ -1,0 +1,322 @@
+// Prisma schema file for Inv_Dash - Inventory Management System
+// This defines the database structure for our retail inventory dashboard
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// CORE ENTITIES
+// ============================================================================
+
+// User model for authentication and role-based access
+// Supports different user types: admin, manager, staff
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  role      UserRole @default(STAFF)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  createdProducts    Product[]         @relation("CreatedBy")
+  updatedProducts    Product[]         @relation("UpdatedBy")
+  stockMovements     StockMovement[]
+  purchaseOrders     PurchaseOrder[]
+  aiRecommendations  AIRecommendation[]
+
+  @@map("users")
+}
+
+// Product categories for organizing inventory
+// Hierarchical structure with parent-child relationships
+model Category {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  parentId    String?
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryHierarchy")
+  products Product[]
+
+  @@map("categories")
+}
+
+// Supplier information for purchase orders and product sourcing
+model Supplier {
+  id           String  @id @default(cuid())
+  name         String
+  contactName  String?
+  email        String?
+  phone        String?
+  address      String?
+  city         String?
+  country      String?
+  isActive     Boolean @default(true)
+  
+  // Business metrics
+  paymentTerms String? // e.g., "Net 30", "COD"
+  leadTime     Int?    // Average lead time in days
+  rating       Float?  // Supplier rating 1-5
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  products       ProductSupplier[]
+  purchaseOrders PurchaseOrder[]
+
+  @@map("suppliers")
+}
+
+// Core product model with comprehensive inventory tracking
+// Includes SKU, pricing, stock levels, and reorder management
+model Product {
+  id          String   @id @default(cuid())
+  sku         String   @unique
+  name        String
+  description String?
+  categoryId  String
+  
+  // Pricing information
+  costPrice      Float    // Purchase cost
+  sellingPrice   Float    // Retail price
+  wholesalePrice Float?   // Wholesale price (optional)
+  
+  // Physical attributes
+  weight         Float?   // Weight in kg
+  dimensions     String?  // "L x W x H" format
+  barcode        String?  @unique
+  
+  // Inventory management
+  currentStock   Int      @default(0)
+  minStock       Int      @default(0)     // Minimum stock threshold
+  maxStock       Int?                     // Maximum stock capacity
+  reorderPoint   Int      @default(0)     // When to reorder
+  reorderQty     Int      @default(0)     // How much to reorder
+  
+  // Product status and tracking
+  isActive       Boolean  @default(true)
+  isTracked      Boolean  @default(true)  // Whether to track inventory
+  
+  // Metadata
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdById    String
+  updatedById    String
+
+  // Relations
+  category          Category            @relation(fields: [categoryId], references: [id])
+  createdBy         User                @relation("CreatedBy", fields: [createdById], references: [id])
+  updatedBy         User                @relation("UpdatedBy", fields: [updatedById], references: [id])
+  suppliers         ProductSupplier[]
+  stockMovements    StockMovement[]
+  purchaseOrderItems PurchaseOrderItem[]
+  aiRecommendations AIRecommendation[]
+
+  @@map("products")
+}
+
+// Junction table for many-to-many relationship between products and suppliers
+// Includes supplier-specific product information
+model ProductSupplier {
+  id             String  @id @default(cuid())
+  productId      String
+  supplierId     String
+  supplierSku    String? // Supplier's SKU for this product
+  supplierPrice  Float?  // Supplier's price
+  leadTime       Int?    // Lead time in days from this supplier
+  minOrderQty    Int?    // Minimum order quantity
+  isPreferred    Boolean @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, supplierId])
+  @@map("product_suppliers")
+}
+
+// ============================================================================
+// INVENTORY TRACKING
+// ============================================================================
+
+// Stock movement tracking for all inventory changes
+// Maintains complete audit trail of stock changes
+model StockMovement {
+  id            String             @id @default(cuid())
+  productId     String
+  type          StockMovementType
+  quantity      Int                // Positive for IN, negative for OUT
+  reason        String?            // Optional reason for the movement
+  reference     String?            // Reference number (PO#, Sale#, etc.)
+  
+  // Stock levels after this movement
+  stockBefore   Int
+  stockAfter    Int
+  
+  // Cost tracking
+  unitCost      Float?             // Cost per unit for this movement
+  totalCost     Float?             // Total cost of movement
+  
+  createdAt     DateTime           @default(now())
+  createdById   String
+
+  // Relations
+  product   Product @relation(fields: [productId], references: [id])
+  createdBy User    @relation(fields: [createdById], references: [id])
+
+  @@map("stock_movements")
+}
+
+// ============================================================================
+// PURCHASE ORDERS
+// ============================================================================
+
+// Purchase order header information
+model PurchaseOrder {
+  id           String              @id @default(cuid())
+  poNumber     String              @unique
+  supplierId   String
+  status       PurchaseOrderStatus @default(DRAFT)
+  
+  // Order dates
+  orderDate    DateTime            @default(now())
+  expectedDate DateTime?
+  receivedDate DateTime?
+  
+  // Financial information
+  subtotal     Float               @default(0)
+  taxAmount    Float               @default(0)
+  totalAmount  Float               @default(0)
+  
+  // Additional information
+  notes        String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  createdById  String
+
+  // Relations
+  supplier Supplier              @relation(fields: [supplierId], references: [id])
+  items    PurchaseOrderItem[]
+  createdBy User                 @relation(fields: [createdById], references: [id])
+
+  @@map("purchase_orders")
+}
+
+// Purchase order line items
+model PurchaseOrderItem {
+  id              String   @id @default(cuid())
+  purchaseOrderId String
+  productId       String
+  quantity        Int
+  unitCost        Float
+  totalCost       Float
+  receivedQty     Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  // Relations
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product       Product       @relation(fields: [productId], references: [id])
+
+  @@map("purchase_order_items")
+}
+
+// ============================================================================
+// AI RECOMMENDATIONS
+// ============================================================================
+
+// AI-powered reordering recommendations
+// Stores ML predictions and suggestions for inventory optimization
+model AIRecommendation {
+  id            String               @id @default(cuid())
+  productId     String
+  type          RecommendationType
+  
+  // Recommendation details
+  currentStock  Int
+  suggestedQty  Int
+  confidence    Float                // Confidence score 0-1
+  reasoning     String?              // AI explanation for the recommendation
+  
+  // Prediction factors
+  factors       Json?                // JSON object with prediction factors
+  seasonality   String?              // Seasonal patterns identified
+  trendAnalysis String?              // Trend analysis results
+  
+  // Status tracking
+  status        RecommendationStatus @default(PENDING)
+  actionTaken   String?              // What action was taken
+  actionDate    DateTime?
+  
+  // Metadata
+  generatedAt   DateTime             @default(now())
+  expiresAt     DateTime?            // When recommendation expires
+  createdById   String
+
+  // Relations
+  product   Product @relation(fields: [productId], references: [id])
+  createdBy User    @relation(fields: [createdById], references: [id])
+
+  @@map("ai_recommendations")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum UserRole {
+  ADMIN     // Full system access
+  MANAGER   // Manage inventory, view reports
+  STAFF     // Basic inventory operations
+}
+
+enum StockMovementType {
+  IN          // Stock received
+  OUT         // Stock sold/used
+  ADJUSTMENT  // Manual adjustment
+  TRANSFER    // Transfer between locations
+  DAMAGED     // Damaged goods write-off
+  EXPIRED     // Expired products write-off
+  RETURN      // Customer return
+}
+
+enum PurchaseOrderStatus {
+  DRAFT       // Being created
+  PENDING     // Sent to supplier
+  CONFIRMED   // Confirmed by supplier
+  SHIPPED     // In transit
+  RECEIVED    // Fully received
+  CANCELLED   // Cancelled
+  PARTIAL     // Partially received
+}
+
+enum RecommendationType {
+  REORDER     // Suggest reordering
+  OVERSTOCK   // Warning about overstock
+  SEASONAL    // Seasonal adjustment
+  TREND       // Trend-based adjustment
+  PROMOTION   // Promotion opportunity
+}
+
+enum RecommendationStatus {
+  PENDING     // Awaiting review
+  APPROVED    // Approved for action
+  REJECTED    // Rejected
+  IMPLEMENTED // Action taken
+  EXPIRED     // Recommendation expired
+}
